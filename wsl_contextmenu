@@ -1,11 +1,14 @@
 #!/bin/bash
+
 # Can easily be replace with another editor
 NEOVIM="/home/dylan/.local/bin/lvim"
 # Define a mapping array for drives
 
-declare -A drive_map
-drive_map["C:"]="/mnt/c"
-drive_map["D:"]="/mnt/d"
+# declare -A drive_map
+# drive_map["C:"]="/mnt/c"
+# drive_map["D:"]="/mnt/d"
+
+# HACK: Using a custom function to conditionaly set the list of drive to allow work drives
 
 # Get the directory of the currently executing script
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,43 +17,19 @@ COPY_FILE_TO_CLIPBOARD_PS1="$DIR/wsl/CopyFileToClipboard.ps1"
 NOTIFY_WINDOWS_PS1="$DIR/wsl/Send-Notification.ps1"
 FILE_PROPERTY_PS1="$DIR/wsl/OpenFileProperty.ps1"
 
-# Function to convert paths between Linux and Windows
-convert_path() {
-	local src_path="$1"
-	local target_os="$2"
-	local format="$3" # This can be "Special" or "UNC"
-
-	if [[ "$target_os" == "Windows" ]]; then
-		if [[ "$src_path" == /mnt/* ]]; then
-			# This is a mapped Windows drive, convert accordingly
-			local drive_letter=$(echo "$src_path" | awk -F '/' '{print $3}')
-			local remaining_path=$(echo "$src_path" | cut -d'/' -f4-)
-			echo "${drive_letter}:\\$(echo $remaining_path | tr '/' '\\')"
-		else
-			# UNC path
-			# TODO : prevent hardcode distro name, use some env or command
-			local unc_path="\\\\wsl.localhost\\Debian${src_path//\//\\}"
-			if [[ "$format" == "Special" ]]; then
-				# Apply special formatting to UNC path by escaping all backslashes
-				echo "${unc_path//\\/\\\\}"
-			elif [[ "$format" == "UNC" ]]; then
-				# Apply UNC formatting by only escaping the first two backslashes
-				echo "\\\\"${unc_path:2}
-			else
-				echo "$unc_path"
-			fi
-		fi
-	elif [[ "$target_os" == "Linux" ]]; then
-		if [[ "$src_path" == \\\\wsl.localhost\\Debian* ]]; then
-			echo "${src_path/\\\\wsl.localhost\\Debian/}" | tr '\\' '/'
-		else
-			local drive_letter=$(echo "$src_path" | awk -F '\\\\' '{print $1}')
-			echo "${src_path/$drive_letter\\/\/mnt\/$drive_letter/}" | tr '\\' '/'
-		fi
-	else
-		return 1
-	fi
-}
+#helper functions
+source "$DIR"/wsl/common_functions.sh
+# Check if set_drive_map function is available
+if typeset -f set_drive_map > /dev/null; then
+  # If it is, call the function
+  # Allow custom drive map based on env variable 
+  set_drive_map
+else
+  # If not, default to a predefined drive_map
+  declare -A drive_map
+  drive_map["C:"]="/mnt/c"
+  drive_map["D:"]="/mnt/d"
+fi
 
 # Filename is the argument
 file_name=$1
