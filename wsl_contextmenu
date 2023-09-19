@@ -1,0 +1,244 @@
+#!/bin/bash
+# Can easily be replace with another editor
+NEOVIM="/home/dylan/.local/bin/lvim"
+# Define a mapping array for drives
+
+declare -A drive_map
+drive_map["C:"]="/mnt/c"
+drive_map["D:"]="/mnt/d"
+
+# Get the directory of the currently executing script
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Path to the PowerShell script relative to this script
+COPY_FILE_TO_CLIPBOARD_PS1="$DIR/wsl/CopyFileToClipboard.ps1"
+NOTIFY_WINDOWS_PS1="$DIR/wsl/Send-Notification.ps1"
+FILE_PROPERTY_PS1="$DIR/wsl/OpenFileProperty.ps1"
+
+# Function to convert paths between Linux and Windows
+convert_path() {
+	local src_path="$1"
+	local target_os="$2"
+	local format="$3" # This can be "Special" or "UNC"
+
+	if [[ "$target_os" == "Windows" ]]; then
+		if [[ "$src_path" == /mnt/* ]]; then
+			# This is a mapped Windows drive, convert accordingly
+			local drive_letter=$(echo "$src_path" | awk -F '/' '{print $3}')
+			local remaining_path=$(echo "$src_path" | cut -d'/' -f4-)
+			echo "${drive_letter}:\\$(echo $remaining_path | tr '/' '\\')"
+		else
+			# UNC path
+			# TODO : prevent hardcode distro name, use some env or command
+			local unc_path="\\\\wsl.localhost\\Debian${src_path//\//\\}"
+			if [[ "$format" == "Special" ]]; then
+				# Apply special formatting to UNC path by escaping all backslashes
+				echo "${unc_path//\\/\\\\}"
+			elif [[ "$format" == "UNC" ]]; then
+				# Apply UNC formatting by only escaping the first two backslashes
+				echo "\\\\"${unc_path:2}
+			else
+				echo "$unc_path"
+			fi
+		fi
+	elif [[ "$target_os" == "Linux" ]]; then
+		if [[ "$src_path" == \\\\wsl.localhost\\Debian* ]]; then
+			echo "${src_path/\\\\wsl.localhost\\Debian/}" | tr '\\' '/'
+		else
+			local drive_letter=$(echo "$src_path" | awk -F '\\\\' '{print $1}')
+			echo "${src_path/$drive_letter\\/\/mnt\/$drive_letter/}" | tr '\\' '/'
+		fi
+	else
+		return 1
+	fi
+}
+
+# Filename is the argument
+file_name=$1
+
+# Current directory
+current_dir=$(pwd)
+
+# Full path
+file_path="$current_dir/$file_name"
+
+# Convert paths
+windows_path=$(convert_path "$file_path" "Windows")
+linux_path=$(convert_path "$file_path" "Linux")
+
+# Check for conversion errors
+if [[ $? -ne 0 ]]; then
+	echo "Error converting paths."
+	exit 1
+fi
+
+file_name=$(basename "$file_path")
+last_modified=$(stat -c %y "$file_path" | awk '{print $1 " " substr($2, 1, 5)}')
+permissions=$(stat -c %a "$file_path")
+
+# Second line of the header
+header_line_2="File : $file_name | Last Modified: $last_modified | Permissions: $permissions"
+
+# Associative array for menu items with keys
+declare -A menu_with_keys
+menu_with_keys["w"]="Copy Windows Path"
+menu_with_keys["x"]="Execute (Windows)"
+menu_with_keys["e"]="Open in Explorer"
+
+# Indexed array for menu items without keys
+menu_without_keys=("Open Properties" "Copy Filename" "Copy Linux Path" "Copy File Itself, dragdrop" "Open With VIM")
+
+# Prepare the header and menu display
+header_for_fzf="Key bindings: "
+expect_keys=""
+for key in "${!menu_with_keys[@]}"; do
+	header_for_fzf+="ctrl-$key: ${menu_with_keys[$key]}, "
+	expect_keys+="ctrl-$key,"
+done
+
+# Remove trailing comma and space from header and expect_keys
+header_for_fzf=${header_for_fzf%, }
+expect_keys=${expect_keys%,}
+
+header_combined="$header_for_fzf\n$header_line_2"
+
+# Combine the menu items from both arrays into one, separated by newlines
+menu_combined=$(printf "%s\n" "${menu_with_keys[@]}" "${menu_without_keys[@]}")
+
+# Show menu using fzf
+fzf_output=$(echo -e "$header_combined\n$menu_combined" | fzf --height=30% --layout=reverse --border --expect="$expect_keys" --header-lines=2)
+
+# Extract the selected key and option
+key=$(echo "$fzf_output" | awk 'NR==1')
+option=$(echo "$fzf_output" | awk 'NR>1')
+
+# # Debugging
+# echo "the key is $key"
+# echo "the option is $option"
+
+# If a ctrl key was pressed, ignore the option that the cursor is on
+if [[ $key == ctrl-* ]]; then
+	key=${key#ctrl-} # remove the 'ctrl-' prefix
+	option=${menu_with_keys["$key"]}
+fi
+
+# If no ctrl key was pressed but an option was chosen, use it as the key
+if [ -z "$key" ] && [ -n "$option" ]; then
+	key=$option
+fi
+
+# Perform the action based on the selected option
+case $option in
+"Copy Windows Path")
+	echo -n "$windows_path" | clip.exe
+	echo "Windows file path copied to clipboard."
+	;;
+"Execute (Windows)")
+	cmd.exe /c "powershell Start-Process '$windows_path'"
+	echo "File opened."
+	;;
+"Open in Explorer")
+	cmd.exe /c "explorer.exe /select,$windows_path"
+	echo "File location opened in Explorer."
+	;;
+"Open Properties")
+	# Generate a temporary PowerShell script with the command
+	# BUG:  Working but ctrl C needed on quit ? handle it
+	temp_ps1=$(mktemp --suffix=.ps1)
+  converted_path_property=$(convert_path "$FILE_PROPERTY_PS1" "Windows" "UNC")
+  echo "$converted_path_property"
+	echo ". '$converted_path_property' " >$temp_ps1
+	# echo ". 'C:\Users\dylan\Documents\Projet\Work\Projet\WSLExplorer\OpenFileProperty.ps1' " >$temp_ps1
+	# echo "Write-Host 'temp script running'" >>$temp_ps1
+	echo "Open-FileProperty -path '$windows_path'" >>$temp_ps1
+
+	# Convert the temporary PowerShell script path to UNC format
+	unc_temp_ps1=$(convert_path "$temp_ps1" "Windows" "UNC")
+
+	# Execute the temporary PowerShell script with ExecutionPolicy set to Bypass
+	cmd.exe /c "powershell.exe -ExecutionPolicy Bypass -File $unc_temp_ps1"
+
+	echo "$temp_ps1"
+	# Remove the temporary PowerShell script
+	rm -f $temp_ps1
+
+	echo "Properties window opened."
+
+	;;
+"Copy Filename")
+	file_name=$(basename "${windows_path//\\//}")
+	echo -n "$file_name" | clip.exe
+	echo "File name copied to clipboard."
+	;;
+"Copy Linux Path")
+	echo -n "$linux_path" | clip.exe
+	echo "Linux file path copied to clipboard."
+	;;
+"Open Previous Versions Tab")
+	echo "Functionality not implemented."
+	;;
+"Open With VIM")
+	$NEOVIM "$linux_path"
+	echo "File opened in Vim."
+	;;
+"Execute on Linux")
+	echo "Functionality not implemented."
+	;;
+"Create Windows Shortcut")
+	echo "Functionality not implemented."
+	;;
+"Send By email")
+	echo "Functionality not implemented."
+	;;
+"Share")
+	echo "Functionality not implemented."
+	;;
+"Copy File Itself, dragdrop")
+	if [ ! -f "$COPY_FILE_TO_CLIPBOARD_PS1" ]; then
+		echo "CopyFileToClipboard.ps1 not found!"
+		exit 1
+	fi
+	# For PowerShell script path use UNC formatting
+	special_windows_copy_file_to_clipboard_ps1=$(convert_path "$COPY_FILE_TO_CLIPBOARD_PS1" "Windows" "UNC")
+	windows_notify_windows_ps1=$(convert_path "$NOTIFY_WINDOWS_PS1" "Windows" "UNC")
+
+	# For the file path, use regular Windows format
+	windows_path=$(convert_path "$file_path" "Windows")
+
+	# Run the command
+	cmd.exe /c "powershell.exe -ExecutionPolicy Bypass -File $special_windows_copy_file_to_clipboard_ps1 -filePath $windows_path"
+	# Create the title and message
+	# TEST: Trying Notification
+	# Require powershell burntoast module globally installed
+	# Working with a temp file, cant pass pwsh arg correctly between bash, cmd a pwsh ?
+	title="NNN File Copy"
+	message="${windows_path} copied to clipboard"
+
+	# Generate a temporary PowerShell script with the command
+	temp_ps1=$(mktemp --suffix=.ps1)
+	echo "& '$windows_notify_windows_ps1' -Title '$title' -Message '$message'" >>$temp_ps1
+
+	# Convert the temporary PowerShell script path to UNC format
+	unc_temp_ps1=$(convert_path "$temp_ps1" "Windows" "UNC")
+
+	# Execute the temporary PowerShell script
+	cmd.exe /c "powershell.exe -ExecutionPolicy Bypass -File $unc_temp_ps1"
+
+	# Remove the temporary PowerShell script
+	rm -f $temp_ps1
+	;;
+"Open windows security tab")
+	echo "Functionality not implemented."
+	;;
+"check version (windows + git)")
+	echo "Functionality not implemented."
+	;;
+"Open Powershell here ( and open as admin )")
+	echo "Functionality not implemented."
+	;;
+"OPEN in new tmux session (with session name of file)")
+	echo "Functionality not implemented."
+	;;
+*)
+	echo "Invalid option."
+	;;
+esac
