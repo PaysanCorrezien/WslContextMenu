@@ -96,8 +96,10 @@ To customize the script to your liking, you can modify several variables and fun
 ## 🚁 Tips
 
 ### Install
-To install `nnn` quickly just use : 
-```bash 
+To install `nnn` on wsl debian just use : 
+```bash
+sudo apt update
+sudo apt-get install pkg-config libreadline-dev
 cd ~ # or any dir like ~/repo/ 
 git clone https://github.com/jarun/nnn.git
 cd nnn
