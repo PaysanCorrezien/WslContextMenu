@@ -109,6 +109,8 @@ patch -p1 < patches/restorepreview/mainline.diff
 make O_NERD=1 O_GITSTATUS=1
 # Replace the system-wide installation of nnn with the custom build
 sudo cp ./nnn /usr/local/bin/nnn
+# Install nnn plugins :
+sh -c "$(curl -Ls https://raw.githubusercontent.com/jarun/nnn/master/plugins/getplugs)"
 ```
 ### 💀 Symlink
 
