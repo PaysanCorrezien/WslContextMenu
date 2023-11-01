@@ -86,6 +86,7 @@ To customize the script to your liking, you can modify several variables and fun
 
 ## 💦 TODO
 
+- use `wslpath` to generate the path instead of my poorly build function
 - remove all log message ( the powershell one !!)
 - Implement real-time file synchronization.
 - Add more file operations like emailing, sharing, etc.
